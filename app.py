@@ -1,24 +1,43 @@
-
-import csv
-import io
 import os
-import sqlite3
-from datetime import datetime
-
 import cv2
-from flask import Flask, Response, jsonify, render_template, request, send_file
+import csv
+import base64
+import sqlite3
+import uuid
+import io
+
+from datetime import datetime
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file,
+    send_from_directory
+)
 
 app = Flask(__name__)
 
 # --------------------------------------------------
-# PATHS
+# CONFIGURATION
 # --------------------------------------------------
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# Vercel allows temporary file storage in /tmp.
+# Data stored here is not permanent.
+BASE_DIR = "/tmp"
+
 DATABASE = os.path.join(BASE_DIR, "visitors.db")
-IMAGE_FOLDER = os.path.join(BASE_DIR, "static", "visitor_images")
+IMAGE_FOLDER = os.path.join(BASE_DIR, "visitor_images")
 
 os.makedirs(IMAGE_FOLDER, exist_ok=True)
+
+# OpenCV Haar Cascade face detector
+CASCADE_PATH = (
+    cv2.data.haarcascades
+    + "haarcascade_frontalface_default.xml"
+)
+
+face_detector = cv2.CascadeClassifier(CASCADE_PATH)
 
 
 # --------------------------------------------------
@@ -31,7 +50,7 @@ def get_db_connection():
     return connection
 
 
-def init_db():
+def initialize_database():
     connection = get_db_connection()
 
     connection.execute("""
@@ -46,136 +65,7 @@ def init_db():
     connection.close()
 
 
-init_db()
-
-
-# --------------------------------------------------
-# FACE DETECTOR
-# --------------------------------------------------
-
-CASCADE_PATH = (
-    cv2.data.haarcascades
-    + "haarcascade_frontalface_default.xml"
-)
-
-face_detector = cv2.CascadeClassifier(CASCADE_PATH)
-
-if face_detector.empty():
-    raise RuntimeError("Could not load the face detector.")
-
-camera = None
-
-# Prevent repeated entries while a face stays visible
-visitor_saved = False
-
-
-def get_camera():
-    global camera
-
-    if camera is None or not camera.isOpened():
-        camera = cv2.VideoCapture(0)
-
-    return camera
-
-
-# --------------------------------------------------
-# SAVE VISITOR
-# --------------------------------------------------
-
-def save_visitor(frame):
-    now = datetime.now()
-
-    filename = now.strftime("visitor_%Y%m%d_%H%M%S_%f.jpg")
-    image_path = os.path.join(IMAGE_FOLDER, filename)
-
-    if not cv2.imwrite(image_path, frame):
-        print("Could not save visitor image.")
-        return False
-
-    entry_time = now.strftime("%d-%m-%Y %I:%M:%S %p")
-
-    connection = get_db_connection()
-
-    connection.execute(
-        "INSERT INTO visitors (image, entry_time) VALUES (?, ?)",
-        (filename, entry_time),
-    )
-
-    connection.commit()
-    connection.close()
-
-    print("Visitor recorded:", entry_time)
-    return True
-
-
-# --------------------------------------------------
-# CAMERA FRAME GENERATOR
-# --------------------------------------------------
-
-def generate_frames():
-    global visitor_saved
-
-    video_camera = get_camera()
-
-    while True:
-        success, frame = video_camera.read()
-
-        if not success:
-            break
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        faces = face_detector.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=3,
-            minSize=(40, 40),
-        )
-
-        face_detected_now = len(faces) > 0
-
-        # Draw a rectangle around each detected face
-        for (x, y, width, height) in faces:
-            cv2.rectangle(
-                frame,
-                (x, y),
-                (x + width, y + height),
-                (0, 255, 0),
-                2,
-            )
-
-        if face_detected_now:
-            if not visitor_saved:
-                if save_visitor(frame):
-                    visitor_saved = True
-
-            cv2.putText(
-                frame,
-                "Visitor Already Recorded",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
-
-        else:
-            # Ready to record the next visitor
-            visitor_saved = False
-
-        success, buffer = cv2.imencode(".jpg", frame)
-
-        if not success:
-            continue
-
-        frame_bytes = buffer.tobytes()
-
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n"
-            + frame_bytes
-            + b"\r\n"
-        )
+initialize_database()
 
 
 # --------------------------------------------------
@@ -183,19 +73,139 @@ def generate_frames():
 # --------------------------------------------------
 
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
 
 
 # --------------------------------------------------
-# LIVE CAMERA
+# FACE DETECTION AND VISITOR CAPTURE
 # --------------------------------------------------
 
-@app.route("/video")
-def video():
-    return Response(
-        generate_frames(),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
+@app.route("/api/detect", methods=["POST"])
+def detect_face():
+    try:
+        data = request.get_json(silent=True)
+
+        if not data or "image" not in data:
+            return jsonify({
+                "success": False,
+                "message": "No image was provided."
+            }), 400
+
+        image_data = data["image"]
+
+        # Remove the data URL prefix
+        if "," in image_data:
+            image_data = image_data.split(",", 1)[1]
+
+        # Decode Base64 image
+        image_bytes = base64.b64decode(image_data)
+
+        image_array = (
+            cv2.imdecode(
+                __import__("numpy").frombuffer(
+                    image_bytes,
+                    dtype=__import__("numpy").uint8
+                ),
+                cv2.IMREAD_COLOR
+            )
+        )
+
+        if image_array is None:
+            return jsonify({
+                "success": False,
+                "message": "Invalid image."
+            }), 400
+
+        # Convert image to grayscale
+        gray = cv2.cvtColor(
+            image_array,
+            cv2.COLOR_BGR2GRAY
+        )
+
+        # Detect faces
+        faces = face_detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(50, 50)
+        )
+
+        if len(faces) == 0:
+            return jsonify({
+                "success": True,
+                "face_detected": False,
+                "message": "No face detected."
+            })
+
+        # Draw rectangles around detected faces
+        for (x, y, w, h) in faces:
+            cv2.rectangle(
+                image_array,
+                (x, y),
+                (x + w, y + h),
+                (0, 255, 0),
+                2
+            )
+
+        # Create unique image filename
+        image_name = f"{uuid.uuid4().hex}.jpg"
+        image_path = os.path.join(
+            IMAGE_FOLDER,
+            image_name
+        )
+
+        # Save captured image
+        cv2.imwrite(image_path, image_array)
+
+        # Record entry time
+        entry_time = datetime.now().strftime(
+            "%d-%m-%Y %I:%M:%S %p"
+        )
+
+        # Save record to database
+        connection = get_db_connection()
+
+        cursor = connection.execute(
+            """
+            INSERT INTO visitors (image, entry_time)
+            VALUES (?, ?)
+            """,
+            (image_name, entry_time)
+        )
+
+        visitor_id = cursor.lastrowid
+
+        connection.commit()
+        connection.close()
+
+        return jsonify({
+            "success": True,
+            "face_detected": True,
+            "visitor_id": visitor_id,
+            "entry_time": entry_time,
+            "image_url": f"/visitor-image/{image_name}",
+            "message": "Visitor entry recorded."
+        })
+
+    except Exception as error:
+        print("Face detection error:", error)
+
+        return jsonify({
+            "success": False,
+            "message": "Unable to process the image."
+        }), 500
+
+
+# --------------------------------------------------
+# DISPLAY SAVED VISITOR IMAGE
+# --------------------------------------------------
+
+@app.route("/visitor-image/<filename>")
+def visitor_image(filename):
+    return send_from_directory(
+        IMAGE_FOLDER,
+        filename
     )
 
 
@@ -203,153 +213,129 @@ def video():
 # GET VISITOR RECORDS
 # --------------------------------------------------
 
-@app.route("/records")
-def records():
-    search_id = request.args.get("id", "").strip()
-    selected_date = request.args.get("date", "").strip()
+@app.route("/api/records")
+def get_records():
+    connection = get_db_connection()
 
-    query = """
+    records = connection.execute(
+        """
         SELECT id, image, entry_time
         FROM visitors
-        WHERE 1=1
-    """
+        ORDER BY id DESC
+        """
+    ).fetchall()
 
-    parameters = []
-
-    if search_id:
-        if not search_id.isdigit():
-            return jsonify([])
-
-        query += " AND id = ?"
-        parameters.append(int(search_id))
-
-    if selected_date:
-        try:
-            formatted_date = datetime.strptime(
-                selected_date, "%Y-%m-%d"
-            ).strftime("%d-%m-%Y")
-        except ValueError:
-            return jsonify([])
-
-        query += " AND substr(entry_time, 1, 10) = ?"
-        parameters.append(formatted_date)
-
-    query += " ORDER BY id DESC"
-
-    connection = get_db_connection()
-    rows = connection.execute(query, parameters).fetchall()
     connection.close()
 
     visitor_list = []
 
-    for row in rows:
+    for record in records:
         visitor_list.append({
-            "id": row["id"],
-            "image": row["image"],
-            "entry_time": row["entry_time"],
-            "image_url": f"/static/visitor_images/{row['image']}",
+            "id": record["id"],
+            "image": record["image"],
+            "image_url": (
+                f"/visitor-image/{record['image']}"
+            ),
+            "entry_time": record["entry_time"]
         })
 
     return jsonify(visitor_list)
 
 
 # --------------------------------------------------
-# DELETE VISITOR AND RENUMBER IDs
+# RECORDS PAGE
 # --------------------------------------------------
 
-@app.route("/delete/<int:visitor_id>", methods=["DELETE"])
+@app.route("/records")
+def records():
+    connection = get_db_connection()
+
+    visitor_records = connection.execute(
+        """
+        SELECT id, image, entry_time
+        FROM visitors
+        ORDER BY id DESC
+        """
+    ).fetchall()
+
+    connection.close()
+
+    # If your project has a records.html template,
+    # render it. Otherwise return the records as JSON.
+    try:
+        return render_template(
+            "records.html",
+            visitors=visitor_records
+        )
+    except Exception:
+        return jsonify([
+            {
+                "id": record["id"],
+                "image": record["image"],
+                "entry_time": record["entry_time"]
+            }
+            for record in visitor_records
+        ])
+
+
+# --------------------------------------------------
+# DELETE VISITOR RECORD
+# --------------------------------------------------
+
+@app.route("/delete/<int:visitor_id>", methods=["POST", "DELETE"])
 def delete_visitor(visitor_id):
     connection = get_db_connection()
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    record = connection.execute(
+        "SELECT image FROM visitors WHERE id = ?",
+        (visitor_id,)
+    ).fetchone()
 
-        visitor = connection.execute(
-            "SELECT image FROM visitors WHERE id = ?",
-            (visitor_id,),
-        ).fetchone()
-
-        if visitor is None:
-            connection.rollback()
-
-            return jsonify({
-                "success": False,
-                "message": "Visitor not found.",
-            }), 404
-
-        # Delete selected visitor
-        connection.execute(
-            "DELETE FROM visitors WHERE id = ?",
-            (visitor_id,),
-        )
-
-        # Temporarily change remaining IDs to negative values
-        connection.execute("UPDATE visitors SET id = -id")
-
-        # Restore IDs as 1, 2, 3...
-        remaining_rows = connection.execute(
-            "SELECT id FROM visitors ORDER BY id DESC"
-        ).fetchall()
-
-        for new_id, row in enumerate(remaining_rows, start=1):
-            connection.execute(
-                "UPDATE visitors SET id = ? WHERE id = ?",
-                (new_id, row["id"]),
-            )
-
-        # Reset AUTOINCREMENT sequence
-        count = len(remaining_rows)
-
-        sequence_row = connection.execute(
-            "SELECT name FROM sqlite_sequence WHERE name = 'visitors'"
-        ).fetchone()
-
-        if sequence_row:
-            connection.execute(
-                "UPDATE sqlite_sequence SET seq = ? WHERE name = 'visitors'",
-                (count,),
-            )
-        else:
-            connection.execute(
-                "INSERT INTO sqlite_sequence (name, seq) VALUES ('visitors', ?)",
-                (count,),
-            )
-
-        connection.commit()
-
-        # Delete the image file
-        image_path = os.path.join(IMAGE_FOLDER, visitor["image"])
-
-        if os.path.exists(image_path):
-            os.remove(image_path)
-
-        return jsonify({
-            "success": True,
-            "message": "Visitor deleted and IDs renumbered.",
-        })
-
-    except Exception as error:
-        connection.rollback()
+    if record is None:
+        connection.close()
 
         return jsonify({
             "success": False,
-            "message": str(error),
-        }), 500
+            "message": "Visitor record not found."
+        }), 404
 
-    finally:
-        connection.close()
+    image_path = os.path.join(
+        IMAGE_FOLDER,
+        record["image"]
+    )
+
+    connection.execute(
+        "DELETE FROM visitors WHERE id = ?",
+        (visitor_id,)
+    )
+
+    connection.commit()
+    connection.close()
+
+    # Delete saved image if it exists
+    if os.path.exists(image_path):
+        os.remove(image_path)
+
+    return jsonify({
+        "success": True,
+        "message": "Visitor record deleted."
+    })
 
 
 # --------------------------------------------------
-# EXPORT CSV
+# EXPORT VISITOR RECORDS TO CSV
 # --------------------------------------------------
 
 @app.route("/export")
-def export_csv():
+def export_records():
     connection = get_db_connection()
 
-    rows = connection.execute(
-        "SELECT id, image, entry_time FROM visitors ORDER BY id ASC"
+    records = connection.execute(
+        """
+        SELECT id, image, entry_time
+        FROM visitors
+        ORDER BY id DESC
+        """
     ).fetchall()
 
     connection.close()
@@ -359,31 +345,53 @@ def export_csv():
 
     writer.writerow([
         "Visitor ID",
-        "Image Filename",
-        "Entry Date and Time",
+        "Image",
+        "Entry Time"
     ])
 
-    for row in rows:
+    for record in records:
         writer.writerow([
-            row["id"],
-            row["image"],
-            row["entry_time"],
+            record["id"],
+            record["image"],
+            record["entry_time"]
         ])
 
-    memory_file = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    memory_file.seek(0)
+    output.seek(0)
+
+    csv_bytes = io.BytesIO(
+        output.getvalue().encode("utf-8")
+    )
 
     return send_file(
-        memory_file,
+        csv_bytes,
         mimetype="text/csv",
         as_attachment=True,
-        download_name="visitor_records.csv",
+        download_name="visitor_records.csv"
     )
 
 
 # --------------------------------------------------
-# RUN APPLICATION
+# OLD VIDEO ROUTE
+# --------------------------------------------------
+
+@app.route("/video")
+def video():
+    return jsonify({
+        "message": (
+            "The old server webcam stream is not used "
+            "in the Vercel version. Use browser camera "
+            "capture and send frames to /api/detect."
+        )
+    }), 410
+
+
+# --------------------------------------------------
+# LOCAL DEVELOPMENT
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
