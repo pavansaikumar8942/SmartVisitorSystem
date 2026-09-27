@@ -183,7 +183,6 @@
 
     <div class="layout">
 
-        <!-- Live Camera -->
         <section class="card">
             <h2>Live Camera</h2>
 
@@ -199,7 +198,6 @@
             </p>
         </section>
 
-        <!-- Visitor Management -->
         <section class="card">
             <h2>Visitor Management</h2>
 
@@ -213,17 +211,11 @@
                     placeholder="Visitor ID"
                 >
 
-                <input
-                    type="date"
-                    id="searchDate"
-                >
+                <input type="date" id="searchDate">
 
                 <button onclick="loadVisitors()">Search</button>
 
-                <button
-                    class="clear-button"
-                    onclick="clearFilters()"
-                >
+                <button class="clear-button" onclick="clearFilters()">
                     Clear
                 </button>
             </div>
@@ -235,7 +227,6 @@
 
     </div>
 
-    <!-- Visitor Records -->
     <section class="card">
         <h2>Visitor Entry Records</h2>
 
@@ -264,15 +255,10 @@
 </div>
 
 <script>
-    // Load visitor records
     async function loadVisitors() {
         const visitorTable = document.getElementById("visitorTable");
-
-        const searchId =
-            document.getElementById("searchId").value.trim();
-
-        const searchDate =
-            document.getElementById("searchDate").value;
+        const searchId = document.getElementById("searchId").value.trim();
+        const searchDate = document.getElementById("searchDate").value;
 
         const parameters = new URLSearchParams();
 
@@ -285,10 +271,7 @@
         }
 
         try {
-            const response = await fetch(
-                "/records?" + parameters.toString()
-            );
-
+            const response = await fetch("/records?" + parameters.toString());
             const visitors = await response.json();
 
             visitorTable.innerHTML = "";
@@ -307,34 +290,25 @@
             visitors.forEach(visitor => {
                 const row = document.createElement("tr");
 
-                // Visitor ID
                 const idCell = document.createElement("td");
                 idCell.textContent = visitor.id;
 
-                // Visitor image
                 const imageCell = document.createElement("td");
                 const image = document.createElement("img");
-
                 image.src = visitor.image_url;
                 image.alt = "Visitor image";
                 image.className = "visitor-image";
-
                 imageCell.appendChild(image);
 
-                // Entry date and time
                 const timeCell = document.createElement("td");
                 timeCell.textContent = visitor.entry_time;
 
-                // Delete button
                 const actionCell = document.createElement("td");
                 const deleteButton = document.createElement("button");
 
                 deleteButton.textContent = "Delete";
                 deleteButton.className = "delete-button";
-
-                deleteButton.onclick = function () {
-                    deleteVisitor(visitor.id);
-                };
+                deleteButton.onclick = () => deleteVisitor(visitor.id);
 
                 actionCell.appendChild(deleteButton);
 
@@ -354,17 +328,13 @@
                     </td>
                 </tr>
             `;
-
             console.error(error);
         }
     }
 
-
-    // Delete visitor
     async function deleteVisitor(visitorId) {
         const confirmed = confirm(
-            "Are you sure you want to delete visitor ID " +
-            visitorId + "?"
+            "Are you sure you want to delete visitor ID " + visitorId + "?"
         );
 
         if (!confirmed) {
@@ -372,12 +342,9 @@
         }
 
         try {
-            const response = await fetch(
-                "/delete/" + visitorId,
-                {
-                    method: "DELETE"
-                }
-            );
+            const response = await fetch("/delete/" + visitorId, {
+                method: "DELETE"
+            });
 
             const result = await response.json();
 
@@ -394,17 +361,12 @@
         }
     }
 
-
-    // Clear search and date filters
     function clearFilters() {
         document.getElementById("searchId").value = "";
         document.getElementById("searchDate").value = "";
-
         loadVisitors();
     }
 
-
-    // Load records when the page opens
     loadVisitors();
 
     // Refresh records every 3 seconds
