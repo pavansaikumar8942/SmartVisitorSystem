@@ -1,0 +1,415 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Visitor Entry Management System</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 25px;
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        header {
+            background: #2563eb;
+            color: white;
+            padding: 22px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+        }
+
+        header h1 {
+            margin: 0 0 8px;
+            font-size: 26px;
+        }
+
+        header p {
+            margin: 0;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 22px;
+            margin-bottom: 25px;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        h2 {
+            margin-top: 0;
+            color: #1d4ed8;
+        }
+
+        .camera-feed {
+            width: 100%;
+            display: block;
+            border-radius: 8px;
+            background: #0f172a;
+        }
+
+        .camera-note {
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 0;
+        }
+
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        input {
+            padding: 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        button,
+        .export-button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+        }
+
+        button:hover,
+        .export-button:hover {
+            background: #1d4ed8;
+        }
+
+        .clear-button {
+            background: #64748b;
+        }
+
+        .clear-button:hover {
+            background: #475569;
+        }
+
+        .delete-button {
+            background: #dc2626;
+            padding: 7px 10px;
+        }
+
+        .delete-button:hover {
+            background: #b91c1c;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 12px;
+            text-align: left;
+            vertical-align: middle;
+        }
+
+        th {
+            background: #eff6ff;
+            color: #1e40af;
+        }
+
+        .visitor-image {
+            width: 75px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+
+        .empty-message {
+            text-align: center;
+            color: #64748b;
+            padding: 20px;
+        }
+
+        @media (max-width: 800px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            body {
+                padding: 12px;
+            }
+
+            header h1 {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+    <header>
+        <h1>Smart Visitor Entry Management System</h1>
+        <p>Automatic visitor entry using live face detection</p>
+    </header>
+
+    <div class="layout">
+
+        <!-- Live Camera -->
+        <section class="card">
+            <h2>Live Camera</h2>
+
+            <img
+                class="camera-feed"
+                src="{{ url_for('video') }}"
+                alt="Live camera feed"
+            >
+
+            <p class="camera-note">
+                When a face is detected, the system captures an image
+                and records the entry date and time.
+            </p>
+        </section>
+
+        <!-- Visitor Management -->
+        <section class="card">
+            <h2>Visitor Management</h2>
+
+            <p>Search visitors by ID or filter records by date.</p>
+
+            <div class="filters">
+                <input
+                    type="number"
+                    id="searchId"
+                    min="1"
+                    placeholder="Visitor ID"
+                >
+
+                <input
+                    type="date"
+                    id="searchDate"
+                >
+
+                <button onclick="loadVisitors()">Search</button>
+
+                <button
+                    class="clear-button"
+                    onclick="clearFilters()"
+                >
+                    Clear
+                </button>
+            </div>
+
+            <a class="export-button" href="{{ url_for('export_csv') }}">
+                Export CSV
+            </a>
+        </section>
+
+    </div>
+
+    <!-- Visitor Records -->
+    <section class="card">
+        <h2>Visitor Entry Records</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Visitor ID</th>
+                        <th>Visitor Image</th>
+                        <th>Entry Date and Time</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody id="visitorTable">
+                    <tr>
+                        <td colspan="4" class="empty-message">
+                            Loading visitor records...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</div>
+
+<script>
+    // Load visitor records
+    async function loadVisitors() {
+        const visitorTable = document.getElementById("visitorTable");
+
+        const searchId =
+            document.getElementById("searchId").value.trim();
+
+        const searchDate =
+            document.getElementById("searchDate").value;
+
+        const parameters = new URLSearchParams();
+
+        if (searchId) {
+            parameters.append("id", searchId);
+        }
+
+        if (searchDate) {
+            parameters.append("date", searchDate);
+        }
+
+        try {
+            const response = await fetch(
+                "/records?" + parameters.toString()
+            );
+
+            const visitors = await response.json();
+
+            visitorTable.innerHTML = "";
+
+            if (visitors.length === 0) {
+                visitorTable.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="empty-message">
+                            No visitor records found.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            visitors.forEach(visitor => {
+                const row = document.createElement("tr");
+
+                // Visitor ID
+                const idCell = document.createElement("td");
+                idCell.textContent = visitor.id;
+
+                // Visitor image
+                const imageCell = document.createElement("td");
+                const image = document.createElement("img");
+
+                image.src = visitor.image_url;
+                image.alt = "Visitor image";
+                image.className = "visitor-image";
+
+                imageCell.appendChild(image);
+
+                // Entry date and time
+                const timeCell = document.createElement("td");
+                timeCell.textContent = visitor.entry_time;
+
+                // Delete button
+                const actionCell = document.createElement("td");
+                const deleteButton = document.createElement("button");
+
+                deleteButton.textContent = "Delete";
+                deleteButton.className = "delete-button";
+
+                deleteButton.onclick = function () {
+                    deleteVisitor(visitor.id);
+                };
+
+                actionCell.appendChild(deleteButton);
+
+                row.appendChild(idCell);
+                row.appendChild(imageCell);
+                row.appendChild(timeCell);
+                row.appendChild(actionCell);
+
+                visitorTable.appendChild(row);
+            });
+
+        } catch (error) {
+            visitorTable.innerHTML = `
+                <tr>
+                    <td colspan="4" class="empty-message">
+                        Unable to load visitor records.
+                    </td>
+                </tr>
+            `;
+
+            console.error(error);
+        }
+    }
+
+
+    // Delete visitor
+    async function deleteVisitor(visitorId) {
+        const confirmed = confirm(
+            "Are you sure you want to delete visitor ID " +
+            visitorId + "?"
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                "/delete/" + visitorId,
+                {
+                    method: "DELETE"
+                }
+            );
+
+            const result = await response.json();
+
+            if (result.success) {
+                alert(result.message);
+                await loadVisitors();
+            } else {
+                alert(result.message || "Could not delete visitor.");
+            }
+
+        } catch (error) {
+            alert("Error deleting visitor.");
+            console.error(error);
+        }
+    }
+
+
+    // Clear search and date filters
+    function clearFilters() {
+        document.getElementById("searchId").value = "";
+        document.getElementById("searchDate").value = "";
+
+        loadVisitors();
+    }
+
+
+    // Load records when the page opens
+    loadVisitors();
+
+    // Refresh records every 3 seconds
+    setInterval(loadVisitors, 3000);
+</script>
+
+</body>
+</html>
